@@ -95,7 +95,7 @@ async def messages_app(scope, receive, send):
 app = Starlette(routes=[
     Route("/", endpoint=health_check),
     Mount("/sse", app=sse_app),
-    Mount("/messages", app=messages_app)
+    Mount("/sse/messages", app=messages_app)
 ])
 
 if __name__ == "__main__":
