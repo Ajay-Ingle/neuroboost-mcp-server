@@ -1,7 +1,8 @@
 import os
 import uvicorn
 from starlette.applications import Starlette
-from starlette.routing import Route
+from starlette.routing import Route, Mount
+from starlette.responses import JSONResponse
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from supabase import create_client, Client
@@ -16,7 +17,6 @@ SUPABASE_KEY = os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
 # Standard Official MCP Server
 server = Server("NeuroBoost_Clinical_Server")
-sse_transport = None
 
 def get_secure_client(jwt_token: str = None) -> Client:
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -71,41 +71,28 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
             
     return [types.TextContent(type="text", text="Unknown tool")]
 
-# ---- WEB SERVER SETUP (This is what fixes the Render Error) ----
-async def sse_endpoint(request):
-    """Initial connection endpoint for Server-Sent Events"""
-    global sse_transport
-    sse_transport = SseServerTransport("/messages")
-    await server.connect(sse_transport)
-    return await sse_transport.handle_sse(request)
+# ---- ASGI WEB SERVER FIX (The Magic) ----
 
-async def messages_endpoint(request):
-    """Endpoint where the Next.js app sends the tool arguments"""
-    if sse_transport:
-        return await sse_transport.handle_post_message(request)
+sse = SseServerTransport("/messages")
 
-from starlette.responses import JSONResponse
-
-# ---- WEB SERVER SETUP ----
 async def health_check(request):
     """Render pings this to make sure the server didn't crash"""
     return JSONResponse({"status": "alive", "service": "NeuroBoost Clinical MCP"})
 
-async def sse_endpoint(request):
-    global sse_transport
-    sse_transport = SseServerTransport("/messages")
-    await server.connect(sse_transport)
-    return await sse_transport.handle_sse(request)
+async def sse_app(scope, receive, send):
+    """Raw ASGI app for the SSE endpoint"""
+    async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
+        await server.run(read_stream, write_stream, server.create_initialization_options())
 
-async def messages_endpoint(request):
-    if sse_transport:
-        return await sse_transport.handle_post_message(request)
+async def messages_app(scope, receive, send):
+    """Raw ASGI app for the POST endpoint"""
+    await sse.handle_post_message(scope, receive, send)
 
-# We added the Health Check Route ("/") here!
+# We use 'Mount' instead of 'Route' so Starlette correctly passes the raw connection streams!
 app = Starlette(routes=[
     Route("/", endpoint=health_check),
-    Route("/sse", endpoint=sse_endpoint),
-    Route("/messages", endpoint=messages_endpoint, methods=["POST"])
+    Mount("/sse", app=sse_app),
+    Mount("/messages", app=messages_app)
 ])
 
 if __name__ == "__main__":
