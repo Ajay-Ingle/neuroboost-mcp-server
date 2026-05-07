@@ -126,4 +126,4 @@ if __name__ == "__main__":
     
     # We use the SSE (Server-Sent Events) transport layer for Cloud HTTP hosting.
     print(f"Starting Clinical MCP Server on port {port}...")
-    mcp.run(transport="sse", port=port)
+    mcp.run(transport="sse")
