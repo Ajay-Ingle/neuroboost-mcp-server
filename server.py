@@ -84,13 +84,31 @@ async def messages_endpoint(request):
     if sse_transport:
         return await sse_transport.handle_post_message(request)
 
+from starlette.responses import JSONResponse
+
+# ---- WEB SERVER SETUP ----
+async def health_check(request):
+    """Render pings this to make sure the server didn't crash"""
+    return JSONResponse({"status": "alive", "service": "NeuroBoost Clinical MCP"})
+
+async def sse_endpoint(request):
+    global sse_transport
+    sse_transport = SseServerTransport("/messages")
+    await server.connect(sse_transport)
+    return await sse_transport.handle_sse(request)
+
+async def messages_endpoint(request):
+    if sse_transport:
+        return await sse_transport.handle_post_message(request)
+
+# We added the Health Check Route ("/") here!
 app = Starlette(routes=[
+    Route("/", endpoint=health_check),
     Route("/sse", endpoint=sse_endpoint),
     Route("/messages", endpoint=messages_endpoint, methods=["POST"])
 ])
 
 if __name__ == "__main__":
-    # Dynamically grab the port from Render and explicitly bind to 0.0.0.0
     port = int(os.environ.get("PORT", 8000))
     print(f"Starting Production MCP Server on port {port}...")
     uvicorn.run(app, host="0.0.0.0", port=port)
