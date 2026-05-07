@@ -1,3 +1,5 @@
 mcp
 supabase
 python-dotenv
+uvicorn
+starlette
