@@ -80,7 +80,7 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
 # ---- PURE ASGI WEB SERVER (Fixes the Routing Bug) ----
 sse = SseServerTransport("/messages")
 
-async def mcp_app(scope, receive, send):
+async def app(scope, receive, send):
     """A mathematically perfect router that guarantees no overlapping bugs."""
     if scope["type"] not in ["http", "https"]:
         return
@@ -109,5 +109,5 @@ async def mcp_app(scope, receive, send):
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     print(f"Starting Production MCP Server on port {port}...")
-    # Notice we run mcp_app directly now, completely bypassing Starlette's router!
-    uvicorn.run(mcp_app, host="0.0.0.0", port=port)
+    # Notice we run app directly now, completely bypassing Starlette's router!
+    uvicorn.run(app, host="0.0.0.0", port=port)
