@@ -1,4 +1,5 @@
 import os
+import asyncio
 import uvicorn
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
@@ -9,13 +10,11 @@ from supabase import create_client, Client
 from dotenv import load_dotenv
 import mcp.types as types
 
-# Load env variables (for local testing)
 load_dotenv(".env.local")
 
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("NEXT_PUBLIC_SUPABASE_ANON_KEY")
 
-# Standard Official MCP Server
 server = Server("NeuroBoost_Clinical_Server")
 
 def get_secure_client(jwt_token: str = None) -> Client:
@@ -24,9 +23,18 @@ def get_secure_client(jwt_token: str = None) -> Client:
         client.postgrest.auth(jwt_token)
     return client
 
+# --- THREAD-SAFE HELPERS (This fixes the Timeout) ---
+def fetch_patient_profile(jwt_token, user_id):
+    supabase = get_secure_client(jwt_token)
+    return supabase.table('profiles').select('*').eq('id', user_id).execute()
+
+def fetch_fatigue_logs(jwt_token, user_id, limit):
+    supabase = get_secure_client(jwt_token)
+    return supabase.table('session_logs').select('session_date, attention_stability_score').eq('user_id', user_id).limit(limit).execute()
+# ----------------------------------------------------
+
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
-    """Defines the Clinical Tools for the AI"""
     return [
         types.Tool(
             name="get_patient_baseline",
@@ -50,13 +58,13 @@ async def handle_list_tools() -> list[types.Tool]:
 
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
-    """Executes the tool with strict RLS enforcement"""
-    supabase = get_secure_client(arguments.get("jwt_token"))
+    jwt_token = arguments.get("jwt_token")
     user_id = arguments.get("user_id")
     
     if name == "get_patient_baseline":
         try:
-            profile_res = supabase.table('profiles').select('*').eq('id', user_id).execute()
+            # We use asyncio.to_thread to prevent the server from freezing!
+            profile_res = await asyncio.to_thread(fetch_patient_profile, jwt_token, user_id)
             return [types.TextContent(type="text", text=str(profile_res.data))]
         except Exception as e:
             return [types.TextContent(type="text", text=f"Error: {str(e)}")]
@@ -64,31 +72,26 @@ async def handle_call_tool(name: str, arguments: dict) -> list[types.TextContent
     elif name == "analyze_cognitive_fatigue":
         try:
             limit = arguments.get("limit", 10)
-            logs = supabase.table('session_logs').select('session_date, attention_stability_score').eq('user_id', user_id).limit(limit).execute()
+            logs = await asyncio.to_thread(fetch_fatigue_logs, jwt_token, user_id, limit)
             return [types.TextContent(type="text", text=str(logs.data))]
         except Exception as e:
             return [types.TextContent(type="text", text=f"Error: {str(e)}")]
             
     return [types.TextContent(type="text", text="Unknown tool")]
 
-# ---- ASGI WEB SERVER FIX (The Magic) ----
-
+# ---- ASGI WEB SERVER FIX ----
 sse = SseServerTransport("/messages")
 
 async def health_check(request):
-    """Render pings this to make sure the server didn't crash"""
     return JSONResponse({"status": "alive", "service": "NeuroBoost Clinical MCP"})
 
 async def sse_app(scope, receive, send):
-    """Raw ASGI app for the SSE endpoint"""
     async with sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 async def messages_app(scope, receive, send):
-    """Raw ASGI app for the POST endpoint"""
     await sse.handle_post_message(scope, receive, send)
 
-# We use 'Mount' instead of 'Route' so Starlette correctly passes the raw connection streams!
 app = Starlette(routes=[
     Route("/", endpoint=health_check),
     Mount("/sse", app=sse_app),
